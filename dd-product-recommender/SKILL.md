@@ -260,7 +260,9 @@ Detection hints are the files/dependencies/patterns that reveal each signal.
 
 ### Backend languages → APM + Profiler + Logs (Foundational)
 
-All eight have a GA APM tracer **and** a Continuous Profiler (profiler ships inside the tracer).
+The seven GA languages (Python through PHP) have a GA APM tracer **and** a Continuous Profiler
+(profiler ships inside the tracer) — these are foundational. Rust and C/C++ are the exceptions:
+their tracing/profiling is Preview/manual, so treat them as **situational**, not foundational.
 
 | Signal | Detection hint | Products | Notes |
 |---|---|---|---|
@@ -281,9 +283,11 @@ service is web-facing so **App and API Protection** becomes a situational option
 - Python: Django / Flask / FastAPI · Node: Express / Koa / Nest / Next.js(server) · Java: Spring Boot ·
   Ruby: Rails · PHP: Laravel · Go: Gin / Echo / chi / Fiber · .NET: ASP.NET (Core).
 
-### Frontend frameworks → RUM + Error Tracking + Session Replay + Product Analytics (Foundational)
+### Frontend frameworks → RUM + Error Tracking + Session Replay (Foundational)
 A browser frontend is foundational for the RUM bundle. **Source Map Uploads becomes foundational
-the moment a bundler/minifier is present** (otherwise stack traces are unreadable).
+the moment a bundler/minifier is present** (otherwise stack traces are unreadable). Product Analytics
+is a **situational (explicit-match-only)** add here, not part of the foundational floor — see the
+catalog and the digital-experience theme.
 
 | Signal | Detection hint | Notes |
 |---|---|---|
@@ -386,7 +390,7 @@ Also auto-supported (Python): Claude Agent SDK, Strands Agents, vLLM.
 | If the codebase has… | Always recommend |
 |---|---|
 | Any backend service | **APM + Log Management + Continuous Profiler** (Rust/C/C++ excepted — tracing Preview/manual) |
-| Any web frontend | **RUM + Error Tracking + Session Replay** (+ Product Analytics); **Source Maps** if bundled |
+| Any web frontend | **RUM + Error Tracking + Session Replay**; **Source Maps** if bundled (Product Analytics only on explicit match) |
 | Any mobile app | **Real User Monitoring (RUM) + Error Tracking** |
 | Any container / Docker | **Infrastructure Monitoring** (+ Container Monitoring) |
 | Any Kubernetes | **Infrastructure + Container + Logs + APM** |
@@ -506,7 +510,7 @@ Foundation (Infra / Logs / APM) is assumed beneath all of these — name it brie
 - Strong adds: **Workload Protection** · **Sensitive Data Scanner**.
 - Foundation beneath: Log Management; Infra + APM round out.
 
-**AI / LLM observability** — confidence: emerging
+**AI / LLM observability** — confidence: well-established
 - Triggers: LLM, GenAI, AI app, chatbot, agent, RAG, prompt, token usage, model latency/cost; an LLM
   client library in the stack.
 - Lead (defining): **LLM Observability**.
