@@ -62,7 +62,8 @@ url="https://dd.$site/oauth2/v1/authorize?client_id=$cid&redirect_uri=http%3A%2F
 PYBIN=$(command -v python3 2>/dev/null || true)
 [ -z "$PYBIN" ] && command -v python >/dev/null 2>&1 && python -c 'import sys;sys.exit(0 if sys.version_info[0]==3 else 1)' 2>/dev/null && PYBIN=$(command -v python)
 if [ -n "$PYBIN" ]; then
-  echo "callback listener: using $("$PYBIN" -V 2>&1) at $PYBIN"
+  echo "callback listener: using $("$PYBIN" -V 2>&1) at $PYBIN" >> "${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"  # interpreter detail → log, not screen (conventions.md)
+  echo "▸ waiting for the browser sign-in to complete…"
   CBFILE="$cb" "$PYBIN" - <<'PY'
 import http.server,urllib.parse,os
 os.umask(0o077)   # callback file (code/state) is 0600, like the sibling .state/.token files

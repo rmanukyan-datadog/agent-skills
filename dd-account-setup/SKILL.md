@@ -92,6 +92,8 @@ already provided. Require `DD_API_KEY`, `DD_APP_KEY`, and `DD_SITE`, and fail fa
 ```bash
 # Run this block ONLY when you inferred a non-interactive request. It enforces the one thing
 # headless needs — keys already present — and fails fast when any are missing.
+# Load DD_* (env > .env.local > .env), same precedence as Step 1 — CI keys often live in .env, not exported.
+for f in .env.local .env; do [ -f "$f" ] || continue; for k in DD_SITE DD_API_KEY DD_APP_KEY; do eval "[ -n \"\${$k:-}\" ]" && continue; v=$(grep -E "^$k=" "$f" | head -1 | cut -d= -f2- | sed 's/^["'\'']//;s/["'\'']$//'); [ -n "$v" ] && export "$k=$v"; done; done
 missing=""
 [ -z "$DD_API_KEY" ] && missing="$missing DD_API_KEY"
 [ -z "$DD_APP_KEY" ] && missing="$missing DD_APP_KEY"
@@ -184,7 +186,7 @@ The full branch (identity check, retrieve-vs-create, the HTTP-code-tagged block,
 
 ## Step 5 — Confirm and hand off
 
-The key is already in `.env`. Load it and validate (a fresh shell each call — always source `.env` first; never inline the literal key):
+The key is already in `.env`. Load it and validate (a fresh shell each call — always load `.env` first by *parsing* it, never `source` it, so a crafted `.env` can't execute; never inline the literal key):
 
 ```bash
 DDLOG="${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"; tf="${TMPDIR:-/tmp}/dd-oauth-$(id -u).token"

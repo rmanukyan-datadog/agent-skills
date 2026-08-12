@@ -31,29 +31,27 @@ git ls-files --error-unmatch "$envf" >/dev/null 2>&1 && { echo "✗ $envf is git
 git check-ignore -q "$envf" 2>/dev/null || printf '\n# Datadog local credentials\n.env\n' >> .gitignore
 name="dd-account-setup-skill — $(basename "$PWD")"
 esc(){ local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; printf %s "$s"; }
-key=""; outcome=""; keysrc=""
+key=""; outcome=""; keysrc=""; DDLOG="${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"   # raw HTTP/URL machinery → log, clean lines → screen (conventions.md)
 if [ -n "$TOKEN" ]; then
   auth=(-H "Authorization: Bearer $TOKEN")
   # OAuth: retrieve most-recent key (NO create — unsupported on OAuth tokens)
   who=$(curl -s "${auth[@]}" "https://api.${DD_SITE}/api/v2/current_user" | grep -oE '"email"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  echo "AUTH SOURCE: OAuth session token from your Step-3 sign-in (…${TOKEN: -4}), authenticated as ${who:-<unknown>}."
-  [ -n "$DD_API_KEY" ] && echo "NOTE: a DD_API_KEY is present in your environment, but this step is NOT using it — it fetches the key fresh from Datadog's backend for the org you just signed into."
-  echo "→ Calling Datadog backend: GET https://api.${DD_SITE}/api/v2/api_keys (list, most-recent first)…"
+  echo "AUTH SOURCE: OAuth session token from your Step-3 sign-in (…${TOKEN: -4}), authenticated as ${who:-<unknown>}." >> "$DDLOG"
+  echo "▸ fetching your org's most-recent API key — signed in as ${who:-signed-in user} (not reusing any ambient DD_API_KEY)"
   # -g/--globoff: the query has page[size] — without it curl treats [ ] as glob syntax and aborts (exit 3) before sending.
   lresp=$(curl -sg -w $'\n%{http_code}' "${auth[@]}" "https://api.${DD_SITE}/api/v2/api_keys?page[size]=1&sort=-created_at"); lrc=$?
   lcode=$(printf '%s' "$lresp" | tail -1)
   # first "id" in the response is data[0].id — correct for this page[size]=1, sort=-created_at query (single key object, no preceding id field).
   kid=$(printf '%s' "$lresp" | grep -oE '"id"[[:space:]]*:[[:space:]]*"[a-f0-9-]{36}"' | head -1 | cut -d'"' -f4)
   kname=$(printf '%s' "$lresp" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  echo "  ← list api_keys: HTTP ${lcode:-<none>}  (curl exit $lrc; key found: $([ -n "$kid" ] && echo "yes — id ${kid}, name \"${kname:-?}\"" || echo no))"
+  echo "GET /api/v2/api_keys (list, most-recent first): HTTP ${lcode:-<none>}  (curl exit $lrc; key found: $([ -n "$kid" ] && echo "yes — id ${kid}, name \"${kname:-?}\"" || echo no))" >> "$DDLOG"
   if [ "$lrc" != 0 ] || ! printf %s "$lcode" | grep -qE '^[0-9]{3}$'; then
     outcome="TRANSPORT_ERROR (curl exit $lrc, no HTTP status — network/URL/proxy, NOT a permission problem)"
   elif [ "$lcode" = 200 ] && [ -n "$kid" ]; then
-    echo "→ Calling Datadog backend: GET https://api.${DD_SITE}/api/v2/api_keys/${kid} (reveal secret)…"
     gresp=$(curl -sg -w $'\n%{http_code}' "${auth[@]}" "https://api.${DD_SITE}/api/v2/api_keys/${kid}"); grc=$?
     gcode=$(printf '%s' "$gresp" | tail -1)
     key=$(printf '%s' "$gresp" | grep -oE '"key"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-    echo "  ← get api_key secret: HTTP ${gcode:-<none>} (curl exit $grc)"
+    echo "GET /api/v2/api_keys/${kid} (reveal secret): HTTP ${gcode:-<none>} (curl exit $grc)" >> "$DDLOG"
     if [ -n "$key" ]; then outcome="retrieved existing key"; keysrc="Datadog backend (GET /api/v2/api_keys/${kid}) as ${who:-signed-in user}"
     else outcome="SECRET_DENIED (${gcode:-transport}) — could list keys but not reveal this one's secret"; fi
   elif [ "$lcode" = 200 ]; then outcome="EMPTY_ORG"
@@ -65,7 +63,7 @@ elif [ -n "$DD_API_KEY" ] && [ -n "$DD_APP_KEY" ]; then
   cresp=$(printf '%s' "$body" | curl -sg -w $'\n%{http_code}' -X POST "https://api.${DD_SITE}/api/v2/api_keys" "${auth[@]}" -H "Content-Type: application/json" --data-binary @-); crc=$?
   ccode=$(printf '%s' "$cresp" | tail -1)
   key=$(printf '%s' "$cresp" | grep -oE '"key"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
-  echo "  ← create api_key: HTTP ${ccode:-<none>} (curl exit $crc)"
+  echo "POST /api/v2/api_keys (create): HTTP ${ccode:-<none>} (curl exit $crc)" >> "$DDLOG"
   if [ -n "$key" ]; then outcome="created key \"$name\""; keysrc="Datadog backend (POST /api/v2/api_keys via your app key)"
   elif [ "$crc" != 0 ]; then outcome="TRANSPORT_ERROR (curl exit $crc — network/URL/proxy, NOT a permission problem)"
   else outcome="CREATE_DENIED (${ccode:-?})"; fi
