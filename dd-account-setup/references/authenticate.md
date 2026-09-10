@@ -45,7 +45,7 @@ vcode=$(curl -sg -o "$DDLOG" -w '%{http_code}' -H "DD-API-KEY: $DD_API_KEY" "htt
 
 ## Path B — Sign in with OAuth (browser, PKCE + state)
 
-The user chose **B. Sign in** (this also runs after Path C creates an account). OAuth handles **no password from us** — the user authenticates on Datadog's own page. Done **inline, no bundled script**: PKCE via `openssl`, the redirect caught by a **one-shot local listener** (stdlib `python3` `http.server` on `localhost:8080` — the port the `redirect_uri` already targets), the token saved to a `0600` file. A **pasted-URL fallback** covers no-`python3`/timeout. Needs `bash`, `curl`, `openssl`, a browser (Windows: WSL/Git Bash); `python3` for the auto-callback (else paste).
+The user chose **B. Sign in** (this also runs after Path C creates an account). OAuth handles **no password from us** — the user authenticates on Datadog's own page. Done **inline, no bundled script**: PKCE via `openssl`, the redirect caught by a **one-shot local listener** (stdlib `python3` `http.server` on `localhost` — port 8080 if free, else the next free port, with the `redirect_uri` set to match), the token saved to a `0600` file. A **pasted-URL fallback** covers no-`python3`/timeout. Needs `bash`, `curl`, `openssl`, a browser (Windows: WSL/Git Bash); `python3` for the auto-callback (else paste).
 
 **Step 1 — start sign-in + auto-catch the callback** (opens the browser, then a one-shot listener writes the `code`/`state` to a file and shows the browser a real "close this tab" page — no paste):
 ```bash
@@ -54,33 +54,56 @@ cid=32e4e079-11ce-49d6-ae37-6cd2c8937354   # Datadog OAuth public client (PKCE; 
 b64u(){ openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 ver=$(openssl rand 32 | b64u); chal=$(printf %s "$ver" | openssl dgst -sha256 -binary | b64u)
 st=$(uuidgen 2>/dev/null || openssl rand -hex 16)
-( umask 077; printf 'ver=%s\nst=%s\n' "$ver" "$st" > "$sf" )
-url="https://dd.$site/oauth2/v1/authorize?client_id=$cid&redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fcallback&response_type=code&code_challenge=$chal&code_challenge_method=S256&state=$st"
-{ command -v open >/dev/null && open "$url"; } 2>/dev/null || { command -v xdg-open >/dev/null && xdg-open "$url"; } 2>/dev/null || printf 'Open this URL:\n%s\n' "$url"
-# Resolve any Python 3 interpreter: prefer `python3`, else a `python` that is v3 (conda/some Windows/Linux).
-# The listener uses only http.server/urllib.parse/os — stdlib since 3.0 — so ANY 3.x works; no version pin.
+# Resolve any Python 3 interpreter FIRST — it both picks the callback port and runs the listener.
+# Prefer `python3`, else a `python` that is v3 (conda/some Windows/Linux). Stdlib only (http.server/urllib/os/socket) — ANY 3.x works; no version pin.
 PYBIN=$(command -v python3 2>/dev/null || true)
 [ -z "$PYBIN" ] && command -v python >/dev/null 2>&1 && python -c 'import sys;sys.exit(0 if sys.version_info[0]==3 else 1)' 2>/dev/null && PYBIN=$(command -v python)
+# Pick the callback port: prefer 8080, else let the OS pick a free one (only when python3 is present — without it we cannot listen, so keep 8080 for the paste-fallback URL). The redirect_uri MUST match this port, so it is chosen before the URL is built and saved to the statefile for Step 2.
+port=8080
 if [ -n "$PYBIN" ]; then
-  echo "callback listener: using $("$PYBIN" -V 2>&1) at $PYBIN" >> "${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"  # interpreter detail → log, not screen (conventions.md)
+  port=$("$PYBIN" - <<'PORTPY'
+import socket
+def grab(p):
+    s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1",p)); return s.getsockname()[1]
+    except OSError:
+        return 0
+    finally:
+        s.close()
+print(grab(8080) or grab(0) or 8080)   # prefer 8080; if busy, a free ephemeral port; 8080 as last resort
+PORTPY
+)
+  [ -n "$port" ] || port=8080
+fi
+( umask 077; printf 'ver=%s\nst=%s\nport=%s\n' "$ver" "$st" "$port" > "$sf" )
+url="https://dd.$site/oauth2/v1/authorize?client_id=$cid&redirect_uri=http%3A%2F%2Flocalhost%3A${port}%2Fcallback&response_type=code&code_challenge=$chal&code_challenge_method=S256&state=$st"
+{ command -v open >/dev/null && open "$url"; } 2>/dev/null || { command -v xdg-open >/dev/null && xdg-open "$url"; } 2>/dev/null || printf 'Open this URL:\n%s\n' "$url"
+if [ -n "$PYBIN" ]; then
+  echo "callback listener: using $("$PYBIN" -V 2>&1) at $PYBIN on port $port" >> "${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"  # interpreter detail → log, not screen (conventions.md)
   echo "▸ waiting for the browser sign-in to complete…"
-  CBFILE="$cb" "$PYBIN" - <<'PY'
+  CB_PORT="$port" CBFILE="$cb" "$PYBIN" - <<'PY'
 import http.server,urllib.parse,os
 os.umask(0o077)   # callback file (code/state) is 0600, like the sibling .state/.token files
+port=int(os.environ.get("CB_PORT","8080"))
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         open(os.environ["CBFILE"],"w").write(urllib.parse.urlparse(self.path).query)
-        self.send_response(200);self.send_header("Content-Type","text/html");self.end_headers()
-        self.wfile.write(b"<h1>Signed in \xe2\x80\x94 close this tab and return to the terminal.</h1>")
+        self.send_response(200);self.send_header("Content-Type","text/html; charset=utf-8");self.end_headers()
+        self.wfile.write(b"<!doctype html><meta charset=utf-8><title>Datadog sign-in</title>"
+                         b"<h1>Signed in.</h1><p>You can close this tab and return to the terminal.</p>")
     def log_message(self,*a):pass
-s=http.server.HTTPServer(("127.0.0.1",8080),H);s.timeout=180;s.handle_request()  # one request, then exit
+try:
+    s=http.server.HTTPServer(("127.0.0.1",port),H);s.timeout=180;s.handle_request()  # one request, then exit
+except OSError:
+    pass  # port taken at bind time (rare race); leave the callback file empty so the shell prints the paste fallback
 PY
-  [ -s "$cb" ] && echo "callback captured ✓ — run Step 2" || echo "no callback in 180s (or port 8080 busy) — use the paste fallback in Step 2"
+  [ -s "$cb" ] && echo "callback captured ✓ — run Step 2" || echo "no callback captured (180s timeout, or port $port was taken) — use the paste fallback in Step 2"
 else
-  echo "no Python 3 found — after approving, copy the localhost:8080 URL your browser shows (it will NOT load) and use the paste fallback in Step 2"
+  echo "no Python 3 found — after approving, copy the localhost:$port URL your browser shows (it will NOT load) and use the paste fallback in Step 2"
 fi
 ```
-With `python3`, the listener captures the redirect automatically — nothing to paste. **Fallback:** if it printed "no callback" / "python3 not found", the browser's `localhost:8080/callback?...` won't load (expected) — copy that **full address-bar URL** for Step 2.
+With `python3`, the listener captures the redirect automatically — nothing to paste. **Fallback:** if it printed "no callback" / "python3 not found", the browser's `localhost` callback URL (`…/callback?...`, on the port named in Step 1) won't load (expected) — copy that **full address-bar URL** for Step 2.
 
 **Step 2 — finish sign-in** (auto: reads the captured file; fallback: put the pasted URL in `PASTE_REDIRECT_URL`):
 ```bash
@@ -90,11 +113,11 @@ paste='PASTE_REDIRECT_URL'                                    # only used if the
 if [ -s "$cb" ]; then q=$(cat "$cb"); else q=${paste#*\?}; fi
 code=$(printf %s "$q" | tr '&' '\n' | sed -n 's/^code=//p'  | head -1)
 st=$(printf   %s "$q" | tr '&' '\n' | sed -n 's/^state=//p' | head -1)
-ver=$(sed -n 's/^ver=//p' "$sf"); exp=$(sed -n 's/^st=//p' "$sf")
+ver=$(sed -n 's/^ver=//p' "$sf"); exp=$(sed -n 's/^st=//p' "$sf"); prt=$(sed -n 's/^port=//p' "$sf"); prt=${prt:-8080}   # callback port chosen in Step 1 — redirect_uri must match it
 [ -n "$code" ] && [ "$st" = "$exp" ] || { echo 'bad code or state mismatch — re-run Step 1'; exit 1; }
 scopes='api_keys_write rum_apps_write incident_read rum_apps_read logs_read_data apm_read metrics_read hosts_read'  # write scopes (api_keys_write, rum_apps_write) are for downstream provisioning the Bearer token performs later (e.g. a RUM app); reading keys here is role-based, not scope-gated (no api_keys_read needed)
 resp=$(curl -s -X POST "https://api.$site/oauth2/v1/token" \
-  --data-urlencode "client_id=$cid" --data-urlencode 'redirect_uri=http://localhost:8080/callback' \
+  --data-urlencode "client_id=$cid" --data-urlencode "redirect_uri=http://localhost:$prt/callback" \
   --data-urlencode 'grant_type=authorization_code' --data-urlencode "code=$code" \
   --data-urlencode "scope=$scopes" --data-urlencode "code_verifier=$ver")
 tok=$(printf %s "$resp" | grep -oE '"access_token"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4)
@@ -107,7 +130,7 @@ DDLOG="${TMPDIR:-/tmp}/dd-onboard-$(id -u).log"
 ```
 
 Notes:
-- **One-shot local listener (no `nc`), paste fallback.** `python3`'s stdlib `http.server` handles exactly one request on `localhost:8080` then exits — so the redirect is captured with no copy-paste and the browser sees a real page. Without `python3` (or on timeout / port 8080 busy) it falls back to the pasted URL. Either way the `code` is one-time and PKCE-bound (useless without the verifier in the `0600` statefile), so it's safe in chat; the token is written to a `0600` file and **never printed**. Step 4 reads it from `${TMPDIR:-/tmp}/dd-oauth-$(id -u).token`.
+- **One-shot local listener (no `nc`), paste fallback.** `python3`'s stdlib `http.server` handles exactly one request on `localhost` (port 8080 if free, else a free port it selects) then exits — so the redirect is captured with no copy-paste and the browser sees a real page. Without `python3` (or on timeout) it falls back to the pasted URL. Either way the `code` is one-time and PKCE-bound (useless without the verifier in the `0600` statefile), so it's safe in chat; the token is written to a `0600` file and **never printed**. Step 4 reads it from `${TMPDIR:-/tmp}/dd-oauth-$(id -u).token`.
 - If sign-in shows **no account yet**, go to **Path C** to create one, then sign in (log in with the email + generated password from `.env`).
 
 > ↳ **Checklist:** tick **3. Authenticate** only after `Authenticated ✓` (token in the file), then mark **4** ◔.
